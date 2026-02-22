@@ -422,10 +422,11 @@ async def approve_callback(context, chat_id, post_id):
 # ------------------------------------------------------------------
 
 async def cookie_validation_job(context) -> None:
-    """Periodic job: validate cookies and attempt auto-refresh if expired.
+    """Periodic job: validate cookies and send alerts if expiring or expired.
 
-    Runs every 6 hours via job_queue. If cookies are invalid, tries
-    OpenClaw auto-refresh. On failure, sends notification to the user.
+    Runs every 6 hours via job_queue. Checks cookie validity and age,
+    sends proactive warnings for expiring cookies and urgent alerts
+    for expired cookies.
     """
     cm = context.bot_data.get("cookie_manager")
     admin_chat_id = context.bot_data.get("admin_chat_id")
@@ -433,34 +434,57 @@ async def cookie_validation_job(context) -> None:
         return
 
     is_valid, _ = cm.validate_cookies()
+
     if is_valid:
         logger.info("Periodic cookie check: valid")
+        # US1: Check if cookies are expiring soon
+        if cm.is_expiring_soon():
+            # Deduplicate: only warn once per 24 hours
+            from datetime import datetime, timezone, timedelta
+            last_warning = context.bot_data.get("last_cookie_warning_at")
+            now = datetime.now(timezone.utc)
+            if last_warning and (now - last_warning) < timedelta(hours=24):
+                logger.info("Cookie expiry warning suppressed (sent %s ago)", now - last_warning)
+                return
+
+            age_hours = cm.get_cookie_age_hours()
+            age_display = f"{age_hours:.1f}" if age_hours else "?"
+            await context.bot.send_message(
+                admin_chat_id,
+                f"⏰ Weibo 쿠키가 설정된 지 {age_display}시간이 경과했습니다.\n"
+                f"곧 만료될 수 있으니 브라우저에서 m.weibo.cn에 로그인한 후 "
+                f"/cookie 명령어로 쿠키를 갱신해주세요.",
+            )
+            context.bot_data["last_cookie_warning_at"] = now
+            logger.warning("Cookie expiry warning sent (age: %s hours)", age_display)
         return
 
-    # Check if cookies need refresh (updated_at > 24h ago)
+    # Cookies are invalid/expired
     status_info = cm.get_status()
     if not status_info["has_cookies"]:
         return
 
-    logger.warning("Periodic cookie check: invalid, attempting OpenClaw refresh")
+    logger.warning("Periodic cookie check: expired")
 
-    # Attempt OpenClaw auto-refresh
-    refreshed = cm.refresh_cookies_via_openclaw()
-    if refreshed:
-        logger.info("Cookies auto-refreshed via OpenClaw")
-        await context.bot.send_message(
-            admin_chat_id,
-            "🔄 Weibo 쿠키가 자동으로 갱신되었습니다.",
-        )
-    else:
-        # T017: Fallback notification
-        logger.warning("OpenClaw auto-refresh failed")
-        await context.bot.send_message(
-            admin_chat_id,
-            "⚠️ 자동 쿠키 갱신에 실패했습니다. "
-            "브라우저에서 m.weibo.cn에 로그인한 후 "
-            "/cookie 명령어로 쿠키를 설정해주세요.",
-        )
+    # US2: Try CookieCloud auto-refresh if configured
+    if cm.is_cookiecloud_configured():
+        logger.info("Attempting CookieCloud auto-refresh...")
+        refreshed = cm.refresh_cookies_via_cookiecloud()
+        if refreshed:
+            logger.info("Cookies auto-refreshed via CookieCloud")
+            await context.bot.send_message(
+                admin_chat_id,
+                "🔄 CookieCloud에서 쿠키가 자동으로 갱신되었습니다.",
+            )
+            return
+        logger.warning("CookieCloud auto-refresh failed, falling back to manual alert")
+
+    await context.bot.send_message(
+        admin_chat_id,
+        "⚠️ Weibo 쿠키가 만료되었습니다.\n"
+        "브라우저에서 m.weibo.cn에 로그인한 후 "
+        "/cookie 명령어로 쿠키를 설정해주세요.",
+    )
 
 
 async def _benchmark_job(context) -> None:

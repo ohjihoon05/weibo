@@ -45,6 +45,16 @@ CLAUDE_API_KEY: str = _load_required("CLAUDE_API_KEY")
 ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "")
 
 # ---------------------------------------------------------------------------
+# CookieCloud settings (005 - cookie auto-refresh)
+# ---------------------------------------------------------------------------
+COOKIECLOUD_SERVER: str = os.getenv("COOKIECLOUD_SERVER", "")
+COOKIECLOUD_UUID: str = os.getenv("COOKIECLOUD_UUID", "")
+COOKIECLOUD_PASSWORD: str = os.getenv("COOKIECLOUD_PASSWORD", "")
+
+# Cookie expiry warning threshold (hours)
+COOKIE_EXPIRY_WARNING_HOURS: int = int(os.getenv("COOKIE_EXPIRY_WARNING_HOURS", "36"))
+
+# ---------------------------------------------------------------------------
 # Publish queue settings (003 - marketing automation)
 # ---------------------------------------------------------------------------
 

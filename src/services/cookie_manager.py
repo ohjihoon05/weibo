@@ -4,6 +4,8 @@ Handles cookie parsing, storage, validation, and header generation
 for the cookie-based Weibo posting workflow.
 """
 
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -165,6 +167,184 @@ class CookieManager:
         cookies = self._data.get("cookies", {}) if self._data else {}
         return cookies.get("XSRF-TOKEN", "")
 
+    def get_cookie_age_hours(self) -> float | None:
+        """Return how many hours have passed since cookies were last updated.
+
+        Returns:
+            Hours elapsed as a float, or None if updated_at is not available.
+        """
+        self._load()
+        if not self._data:
+            return None
+        updated_at_str = self._data.get("updated_at")
+        if not updated_at_str:
+            return None
+        try:
+            updated_at = datetime.fromisoformat(updated_at_str)
+            now = datetime.now(timezone.utc)
+            return (now - updated_at).total_seconds() / 3600
+        except (ValueError, TypeError):
+            return None
+
+    def is_expiring_soon(self, threshold_hours: float | None = None) -> bool:
+        """Check whether cookies are likely to expire soon.
+
+        Args:
+            threshold_hours: Hours after which cookies are considered
+                expiring soon. Defaults to config.COOKIE_EXPIRY_WARNING_HOURS.
+
+        Returns:
+            True if cookie age exceeds the threshold.
+        """
+        if threshold_hours is None:
+            from src.config import COOKIE_EXPIRY_WARNING_HOURS
+            threshold_hours = COOKIE_EXPIRY_WARNING_HOURS
+        age = self.get_cookie_age_hours()
+        if age is None:
+            return False
+        return age > threshold_hours
+
+    # ------------------------------------------------------------------
+    # CookieCloud integration (005 - cookie auto-refresh)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def is_cookiecloud_configured() -> bool:
+        """Return True if all CookieCloud config variables are set."""
+        from src.config import COOKIECLOUD_SERVER, COOKIECLOUD_UUID, COOKIECLOUD_PASSWORD
+        return bool(COOKIECLOUD_SERVER and COOKIECLOUD_UUID and COOKIECLOUD_PASSWORD)
+
+    @staticmethod
+    def _decrypt_cookiecloud_legacy(encrypted_b64: str, passphrase: str) -> dict:
+        """Decrypt CookieCloud legacy format (CryptoJS OpenSSL / AES-256-CBC).
+
+        Data format: "Salted__" + 8-byte salt + ciphertext, all base64-encoded.
+        Key derivation: EVP_BytesToKey (MD5-based) from passphrase + salt.
+        """
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+
+        raw = base64.b64decode(encrypted_b64)
+        # Verify "Salted__" prefix
+        if raw[:8] != b"Salted__":
+            raise ValueError("Missing 'Salted__' prefix in legacy CookieCloud data")
+
+        salt = raw[8:16]
+        ciphertext = raw[16:]
+
+        # EVP_BytesToKey: derive 32-byte key + 16-byte IV using MD5
+        key_iv = b""
+        prev = b""
+        while len(key_iv) < 48:  # 32 (key) + 16 (IV)
+            prev = hashlib.md5(prev + passphrase.encode("utf-8") + salt).digest()
+            key_iv += prev
+
+        key = key_iv[:32]
+        iv = key_iv[32:48]
+
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
+        return json.loads(plaintext)
+
+    @staticmethod
+    def _decrypt_cookiecloud_fixed(encrypted_b64: str, passphrase: str) -> dict:
+        """Decrypt CookieCloud fixed format (AES-128-CBC, zero IV).
+
+        Key: passphrase bytes directly as 16-byte AES key.
+        IV: 16 bytes of 0x00.
+        """
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+
+        ciphertext = base64.b64decode(encrypted_b64)
+        key = passphrase.encode("utf-8")[:16]
+        iv = b"\x00" * 16
+
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        plaintext = unpad(cipher.decrypt(ciphertext), AES.block_size)
+        return json.loads(plaintext)
+
+    @staticmethod
+    def _decrypt_cookiecloud(encrypted_b64: str, uuid: str, password: str,
+                             crypto_type: str = "legacy") -> dict:
+        """Decrypt CookieCloud data, dispatching by crypto_type."""
+        # Derive passphrase: MD5(uuid-password)[:16]
+        passphrase = hashlib.md5(f"{uuid}-{password}".encode("utf-8")).hexdigest()[:16]
+
+        if crypto_type == "aes-128-cbc-fixed":
+            return CookieManager._decrypt_cookiecloud_fixed(encrypted_b64, passphrase)
+        # Default to legacy
+        return CookieManager._decrypt_cookiecloud_legacy(encrypted_b64, passphrase)
+
+    def refresh_cookies_via_cookiecloud(self) -> bool:
+        """Fetch and apply fresh cookies from CookieCloud server.
+
+        Returns:
+            True if cookies were successfully refreshed and validated.
+        """
+        from src.config import COOKIECLOUD_SERVER, COOKIECLOUD_UUID, COOKIECLOUD_PASSWORD
+
+        url = f"{COOKIECLOUD_SERVER.rstrip('/')}/get/{COOKIECLOUD_UUID}"
+        try:
+            resp = requests.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.ConnectionError:
+            logger.warning("CookieCloud server unreachable: %s", COOKIECLOUD_SERVER)
+            return False
+        except requests.RequestException as exc:
+            logger.warning("CookieCloud request failed: %s", exc)
+            return False
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.warning("CookieCloud response parse error: %s", exc)
+            return False
+
+        encrypted = data.get("encrypted")
+        if not encrypted:
+            logger.warning("CookieCloud response has no 'encrypted' field")
+            return False
+
+        crypto_type = data.get("crypto_type", "legacy")
+
+        try:
+            decrypted = self._decrypt_cookiecloud(
+                encrypted, COOKIECLOUD_UUID, COOKIECLOUD_PASSWORD, crypto_type
+            )
+        except Exception as exc:
+            logger.warning("CookieCloud decryption failed: %s", exc)
+            return False
+
+        # Extract Weibo cookies from cookie_data
+        cookie_data = decrypted.get("cookie_data", {})
+        weibo_cookies: dict[str, str] = {}
+
+        for domain, cookie_list in cookie_data.items():
+            if "weibo" not in domain:
+                continue
+            if not isinstance(cookie_list, list):
+                continue
+            for cookie in cookie_list:
+                name = cookie.get("name", "")
+                value = cookie.get("value", "")
+                if name and value:
+                    weibo_cookies[name] = value
+
+        # Verify required fields present
+        for field in REQUIRED_COOKIE_FIELDS:
+            if field not in weibo_cookies:
+                logger.warning("CookieCloud: missing required cookie field: %s", field)
+                return False
+
+        # Save and validate
+        self.save_cookies(weibo_cookies)
+        is_valid, _ = self.validate_cookies()
+        if is_valid:
+            logger.info("Cookies refreshed via CookieCloud successfully")
+            return True
+
+        logger.warning("CookieCloud cookies saved but validation failed")
+        return False
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -198,64 +378,3 @@ class CookieManager:
             self._data["uid"] = uid
         self._write()
 
-    # ------------------------------------------------------------------
-    # OpenClaw integration (T015)
-    # ------------------------------------------------------------------
-
-    def refresh_cookies_via_openclaw(self) -> bool:
-        """Attempt to refresh cookies using OpenClaw browser automation.
-
-        Sends a request to the local OpenClaw instance to perform a
-        Weibo login and extract fresh cookies.
-
-        Returns:
-            True if cookies were successfully refreshed, False otherwise.
-        """
-        openclaw_url = "http://localhost:18789"
-
-        try:
-            resp = requests.post(
-                f"{openclaw_url}/api/tasks",
-                json={
-                    "skill": "weibo-cookie-refresh",
-                    "params": {
-                        "url": "https://m.weibo.cn",
-                        "action": "login_and_extract_cookies",
-                    },
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-
-            # Extract cookies from OpenClaw response
-            new_cookies = result.get("cookies") or result.get("data", {}).get("cookies")
-            if not new_cookies or not isinstance(new_cookies, dict):
-                logger.warning("OpenClaw returned no cookies")
-                return False
-
-            # Verify required fields
-            for field in REQUIRED_COOKIE_FIELDS:
-                if field not in new_cookies:
-                    logger.warning("OpenClaw cookies missing required field: %s", field)
-                    return False
-
-            # Save and validate
-            self.save_cookies(new_cookies)
-            is_valid, _ = self.validate_cookies()
-            if is_valid:
-                logger.info("Cookies refreshed via OpenClaw successfully")
-                return True
-
-            logger.warning("OpenClaw cookies saved but validation failed")
-            return False
-
-        except requests.ConnectionError:
-            logger.warning("OpenClaw is not running (connection refused)")
-            return False
-        except requests.RequestException as exc:
-            logger.warning("OpenClaw request failed: %s", exc)
-            return False
-        except (KeyError, ValueError) as exc:
-            logger.warning("Failed to parse OpenClaw response: %s", exc)
-            return False

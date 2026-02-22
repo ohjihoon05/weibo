@@ -9,6 +9,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-22
 - JSON 파일 (data/ 디렉토리, 기존 패턴 유지) (003-openclaw-marketing-auto)
 - Bash/Shell scripts + OpenClaw CLI (2026.1.30) + YAML frontmatter Markdown + OpenClaw CLI (`openclaw`), `clawhub`, `curl` (004-openclaw-skill-setup)
 - `~/.openclaw/skills/` (스킬 정의), `~/.openclaw/cron/jobs.json` (크론 잡), `~/.openclaw/workspace/` (워크스페이스) (004-openclaw-skill-setup)
+- Python 3.13 (Raspberry Pi 기존 설치) + requests (기존), pycryptodome (신규 — AES-CBC 복호화), python-telegram-bot (기존) (005-cookie-auto-refresh)
+- JSON 파일 (data/weibo_cookies.json, 기존 패턴 유지) + 인메모리 (bot_data) (005-cookie-auto-refresh)
 
 - Python 3.13 (Raspberry Pi 기존 설치) + python-telegram-bot v21.x, requests, Pillow, anthropic (Claude API) (001-weibo-auto-posting)
 
@@ -28,9 +30,9 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.13 (Raspberry Pi 기존 설치): Follow standard conventions
 
 ## Recent Changes
+- 005-cookie-auto-refresh: Added Python 3.13 (Raspberry Pi 기존 설치) + requests (기존), pycryptodome (신규 — AES-CBC 복호화), python-telegram-bot (기존)
 - 004-openclaw-skill-setup: Added Bash/Shell scripts + OpenClaw CLI (2026.1.30) + YAML frontmatter Markdown + OpenClaw CLI (`openclaw`), `clawhub`, `curl`
 - 003-openclaw-marketing-auto: Added Python 3.13 (Raspberry Pi 기존 설치) + python-telegram-bot[job-queue], requests, Pillow, anthropic, python-dotenv, flask (신규 - 내부 API)
-- 002-weibo-cookie-posting: Added Python 3.13 (기존 프로젝트와 동일) + requests, python-telegram-bot[job-queue], Pillow, anthropic, python-dotenv (기존 그대로)
 
 
 <!-- MANUAL ADDITIONS START -->
