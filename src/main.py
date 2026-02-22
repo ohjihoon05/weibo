@@ -8,18 +8,26 @@ mode with approval flow (US2).
 import logging
 import asyncio
 import os
+from datetime import time as datetime_time
 
 from telegram.ext import ApplicationBuilder
 
-from src.config import TELEGRAM_BOT_TOKEN, CLAUDE_API_KEY, mask_sensitive
+from src.config import (
+    TELEGRAM_BOT_TOKEN, CLAUDE_API_KEY, ADMIN_CHAT_ID,
+    mask_sensitive, SCHEDULER_INTERVAL_SECONDS,
+)
 from src.services.telegram_handler import get_handlers, send_preview
 from src.services.translator import TranslatorService
 from src.services.weibo_client import WeiboClient, WeiboAPIError, CookieExpiredError
 from src.services.cookie_manager import CookieManager
 from src.services.exchange_rate import get_jpy_to_cny_rate
 from src.services.hashtag_generator import generate_hashtags
+from src.services.scheduler import process_queue
+from src.services.benchmark_analyzer import BenchmarkAnalyzer
+from src.services.metrics_collector import MetricsCollector
 from src.models.post import Post, PostHistory, Status, Mode, Action
 from src.storage.json_store import save_post, append_history
+from src.storage.publish_queue import JsonPublishQueue
 
 logger = logging.getLogger(__name__)
 
@@ -455,6 +463,124 @@ async def cookie_validation_job(context) -> None:
         )
 
 
+async def _benchmark_job(context) -> None:
+    """Weekly job: collect competitor posts and generate benchmark report."""
+    analyzer = context.bot_data.get("benchmark_analyzer")
+    admin_chat_id = context.bot_data.get("admin_chat_id")
+    if not analyzer or not admin_chat_id:
+        return
+
+    try:
+        logger.info("Starting weekly benchmark collection...")
+        summary = analyzer.collect_competitor_posts()
+        report = analyzer.generate_benchmark_report()
+        text = analyzer.format_benchmark_telegram(report)
+        await context.bot.send_message(admin_chat_id, text)
+        logger.info("Weekly benchmark report sent")
+    except Exception as exc:
+        logger.exception("Benchmark job error: %s", exc)
+        if admin_chat_id:
+            await context.bot.send_message(
+                admin_chat_id, f"❌ 주간 벤치마킹 실패: {exc}"
+            )
+
+
+async def _weekly_report_job(context) -> None:
+    """Weekly job: generate and send performance report."""
+    analyzer = context.bot_data.get("benchmark_analyzer")
+    admin_chat_id = context.bot_data.get("admin_chat_id")
+    if not analyzer or not admin_chat_id:
+        return
+
+    try:
+        logger.info("Generating weekly performance report...")
+        report = analyzer.generate_weekly_report()
+        if "error" not in report:
+            text = analyzer.format_weekly_telegram(report)
+            await context.bot.send_message(admin_chat_id, text)
+            logger.info("Weekly performance report sent")
+        else:
+            logger.info("No data for weekly report: %s", report.get("error"))
+    except Exception as exc:
+        logger.exception("Weekly report job error: %s", exc)
+
+
+async def _metrics_collection_job(context) -> None:
+    """Job: collect metrics for a specific post (one-shot, scheduled after publish)."""
+    bid = context.job.data.get("bid")
+    post_id = context.job.data.get("post_id")
+    collector = context.bot_data.get("metrics_collector")
+    if not collector or not bid:
+        return
+
+    try:
+        metrics = collector.collect_post_metrics(bid)
+        if metrics and post_id:
+            metrics["post_id"] = post_id
+        logger.info("Metrics collected for bid %s", bid)
+    except Exception as exc:
+        logger.error("Metrics collection failed for bid %s: %s", bid, exc)
+
+
+async def _monthly_optimization_job(context) -> None:
+    """Monthly job: generate and send optimization suggestions."""
+    analyzer = context.bot_data.get("benchmark_analyzer")
+    admin_chat_id = context.bot_data.get("admin_chat_id")
+    if not analyzer or not admin_chat_id:
+        return
+
+    try:
+        from src.storage.json_store import load_competitor_posts, load_metrics
+        from collections import Counter
+
+        comp_posts = load_competitor_posts()
+        metrics = load_metrics()
+
+        if not comp_posts and not metrics:
+            logger.info("No data for monthly optimization")
+            return
+
+        lines = ["💡 월간 해시태그 & 콘텐츠 최적화 분석\n"]
+
+        if comp_posts:
+            all_tags = []
+            for p in comp_posts:
+                all_tags.extend(p.get("hashtags", []))
+            tag_counts = Counter(all_tags).most_common(10)
+            if tag_counts:
+                lines.append("인기 경쟁 해시태그:")
+                for tag, count in tag_counts:
+                    lines.append(f"  #{tag} ({count}회)")
+
+        recs = analyzer._generate_recommendations(comp_posts[-50:] if comp_posts else [])
+        if recs:
+            lines.append("\n개선 제안:")
+            for rec in recs:
+                lines.append(f"  • {rec}")
+
+        await context.bot.send_message(admin_chat_id, "\n".join(lines))
+        logger.info("Monthly optimization report sent")
+    except Exception as exc:
+        logger.exception("Monthly optimization job error: %s", exc)
+
+
+def schedule_metrics_collection(app, bid: str, post_id: str) -> None:
+    """Schedule metrics collection at 2h, 24h, and 7d after posting."""
+    intervals = [
+        (2 * 3600, "2h"),      # 2 hours
+        (24 * 3600, "24h"),    # 24 hours
+        (7 * 24 * 3600, "7d"), # 7 days
+    ]
+    for delay, label in intervals:
+        app.job_queue.run_once(
+            _metrics_collection_job,
+            when=delay,
+            data={"bid": bid, "post_id": post_id},
+            name=f"metrics_{bid}_{label}",
+        )
+    logger.info("Metrics collection scheduled for bid %s at 2h/24h/7d", bid)
+
+
 def main():
     """Bootstrap logging, services, handlers, and start long-polling."""
     # Create logs directory
@@ -492,17 +618,41 @@ def main():
     for handler in get_handlers():
         app.add_handler(handler)
 
+    # Initialize publish queue
+    publish_queue = JsonPublishQueue()
+    recovered = publish_queue.recover_stale_processing()
+    if recovered:
+        logger.info("Recovered %d stale queue items on startup", recovered)
+
+    # Initialize benchmark analyzer and metrics collector
+    try:
+        from src.services.weibo_scraper import WeiboScraper
+        scraper = WeiboScraper(cookie_header=cookie_manager.get_cookie_header())
+        benchmark_analyzer = BenchmarkAnalyzer(scraper=scraper)
+        metrics_collector = MetricsCollector(cookie_manager=cookie_manager)
+    except Exception as exc:
+        logger.warning("Failed to init scraper/analyzer: %s", exc)
+        scraper = None
+        benchmark_analyzer = BenchmarkAnalyzer()
+        metrics_collector = None
+
     # Wire pipeline callbacks so handlers can invoke them
     app.bot_data["pipeline_callback"] = pipeline_callback
     app.bot_data["preview_callback"] = preview_pipeline_callback
     app.bot_data["approve_callback"] = approve_callback
     app.bot_data["cookie_manager"] = cookie_manager
+    app.bot_data["publish_queue"] = publish_queue
+    app.bot_data["weibo_client"] = weibo_client
+    app.bot_data["benchmark_analyzer"] = benchmark_analyzer
+    app.bot_data["metrics_collector"] = metrics_collector
+    if scraper:
+        app.bot_data["weibo_scraper"] = scraper
 
-    # T016: Schedule periodic cookie validation (every 6 hours)
-    # admin_chat_id will be set when the first /start or /cookie command is received
-    # For now, we'll use the first chat that interacts with the bot
-    app.bot_data["admin_chat_id"] = os.getenv("ADMIN_CHAT_ID", "")
-    if app.bot_data["admin_chat_id"]:
+    # Admin chat ID for notifications
+    app.bot_data["admin_chat_id"] = ADMIN_CHAT_ID
+
+    # Schedule periodic cookie validation (every 6 hours)
+    if ADMIN_CHAT_ID:
         app.job_queue.run_repeating(
             cookie_validation_job,
             interval=6 * 60 * 60,  # 6 hours
@@ -510,6 +660,57 @@ def main():
             name="cookie_validation",
         )
         logger.info("Periodic cookie validation scheduled (every 6 hours)")
+
+    # Schedule queue processing (check every 30 minutes)
+    app.job_queue.run_repeating(
+        process_queue,
+        interval=SCHEDULER_INTERVAL_SECONDS,
+        first=30,  # First check after 30 seconds
+        name="queue_processor",
+    )
+    logger.info("Queue processor scheduled (every %d seconds)", SCHEDULER_INTERVAL_SECONDS)
+
+    # Schedule weekly benchmarking (Sunday evening CST = Sunday 11:00 UTC)
+    app.job_queue.run_daily(
+        _benchmark_job,
+        time=datetime_time(hour=11, minute=0),  # 19:00 CST = 11:00 UTC
+        days=(6,),  # Sunday
+        name="weekly_benchmark",
+    )
+    logger.info("Weekly benchmark scheduled (Sunday 19:00 CST)")
+
+    # Schedule weekly performance report (Monday morning CST = Monday 01:00 UTC)
+    app.job_queue.run_daily(
+        _weekly_report_job,
+        time=datetime_time(hour=1, minute=0),  # 09:00 CST = 01:00 UTC
+        days=(0,),  # Monday
+        name="weekly_report",
+    )
+    logger.info("Weekly report scheduled (Monday 09:00 CST)")
+
+    # Schedule monthly optimization analysis (1st of each month, 10:00 CST = 02:00 UTC)
+    app.job_queue.run_monthly(
+        _monthly_optimization_job,
+        when=datetime_time(hour=2, minute=0),  # 10:00 CST = 02:00 UTC
+        day=1,
+        name="monthly_optimization",
+    )
+    logger.info("Monthly optimization scheduled (1st of month, 10:00 CST)")
+
+    # Start Flask API server in a daemon thread (T032)
+    try:
+        import threading
+        from src.api.routes import create_app
+        flask_app = create_app(publish_queue)
+        flask_thread = threading.Thread(
+            target=flask_app.run,
+            kwargs={"host": "127.0.0.1", "port": 5000, "use_reloader": False},
+            daemon=True,
+        )
+        flask_thread.start()
+        logger.info("Flask API server started on http://127.0.0.1:5000")
+    except Exception as exc:
+        logger.warning("Failed to start Flask API server: %s", exc)
 
     logging.info("Bot started. Listening for messages...")
     app.run_polling(drop_pending_updates=True)

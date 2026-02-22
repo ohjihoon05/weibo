@@ -86,3 +86,31 @@ def generate_hashtags(listing: PropertyListing) -> list[str]:
         _add("#投资回报")
 
     return hashtags
+
+
+def generate_expert_hashtags(topic: str | None = None) -> list[str]:
+    """Generate hashtags for expert content (not property listings).
+
+    Focused on Osaka/Kansai region and general real estate knowledge.
+
+    Args:
+        topic: Optional ExpertTopic value for topic-specific tags.
+
+    Returns:
+        List of hashtag strings.
+    """
+    base = ["#日本房产", "#大阪房产", "#海外置业", "#关西投资", "#日本房产知识"]
+
+    topic_tags = {
+        "MARKET_TREND": ["#房产市场", "#投资趋势"],
+        "INVESTMENT_TIP": ["#投资回报", "#海外投资"],
+        "AREA_GUIDE": ["#关西生活", "#大阪生活"],
+        "TAX_VISA": ["#日本签证", "#海外购房"],
+        "PURCHASE_PROCESS": ["#日本买房", "#购房指南"],
+    }
+
+    tags = list(base)
+    if topic and topic in topic_tags:
+        tags.extend(topic_tags[topic])
+
+    return tags

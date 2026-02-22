@@ -39,6 +39,60 @@ def _load_required(name: str) -> str:
 TELEGRAM_BOT_TOKEN: str = _load_required("TELEGRAM_BOT_TOKEN")
 CLAUDE_API_KEY: str = _load_required("CLAUDE_API_KEY")
 
+# ---------------------------------------------------------------------------
+# Optional environment variables
+# ---------------------------------------------------------------------------
+ADMIN_CHAT_ID: str = os.getenv("ADMIN_CHAT_ID", "")
+
+# ---------------------------------------------------------------------------
+# Publish queue settings (003 - marketing automation)
+# ---------------------------------------------------------------------------
+
+# Optimal publishing times in China Standard Time (UTC+8) as (hour, minute)
+PUBLISH_TIMES: list[tuple[int, int]] = [
+    (9, 0),   # 중국 시간 09:00 (출근 시간)
+    (20, 0),  # 중국 시간 20:00 (저녁 여유 시간)
+]
+
+# Maximum posts per day
+MAX_DAILY_POSTS: int = 2
+
+# Scheduler check interval in seconds (how often to check the queue)
+SCHEDULER_INTERVAL_SECONDS: int = 30 * 60  # 30 minutes
+
+# ---------------------------------------------------------------------------
+# Benchmarking settings
+# ---------------------------------------------------------------------------
+
+# Day of week for weekly benchmark (0=Monday, 6=Sunday)
+BENCHMARK_DAY: int = 6  # Sunday
+
+# Scraping delay between requests (seconds)
+SCRAPING_DELAY_MIN: float = 3.0
+SCRAPING_DELAY_MAX: float = 5.0
+
+# ---------------------------------------------------------------------------
+# Reporting settings
+# ---------------------------------------------------------------------------
+
+# Day of week for weekly report (0=Monday)
+REPORT_DAY: int = 0  # Monday
+REPORT_HOUR_CST: int = 9  # 09:00 CST
+
+# ---------------------------------------------------------------------------
+# Expert content settings
+# ---------------------------------------------------------------------------
+
+EXPERT_TOPICS: list[str] = [
+    "MARKET_TREND",      # 오사카/간사이 부동산 시장 동향
+    "INVESTMENT_TIP",    # 일본 부동산 투자 수익률/팁
+    "AREA_GUIDE",        # 오사카 근교 지역 소개
+    "TAX_VISA",          # 외국인 세금/비자 정보
+    "PURCHASE_PROCESS",  # 일본 부동산 매매 절차 안내
+]
+
+# Maximum character length for expert content (Weibo format)
+EXPERT_CONTENT_MAX_LENGTH: int = 200
 
 # ---------------------------------------------------------------------------
 # Utility helpers
