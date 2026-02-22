@@ -1,3 +1,9 @@
+---
+name: weibo-expert
+description: Weibo 전문가 콘텐츠 — 일본 부동산 전문 콘텐츠 자동 생성 및 관리
+metadata: { "openclaw": { "emoji": "🧠", "requires": { "bins": ["curl"] } } }
+---
+
 # Weibo 전문가 콘텐츠
 
 오사카/간사이 일본 부동산 전문가 콘텐츠를 자동 생성하고 관리합니다.
@@ -6,12 +12,12 @@
 
 ### 최근 전문가 콘텐츠 목록
 ```bash
-curl -s http://localhost:5000/api/expert/recent | python3 -m json.tool
+curl -s --max-time 10 http://localhost:5000/api/expert/recent | python3 -m json.tool
 ```
 
 ### 전문가 콘텐츠 생성 요청
 ```bash
-curl -s -X POST http://localhost:5000/api/expert/generate | python3 -m json.tool
+curl -s --max-time 10 -X POST http://localhost:5000/api/expert/generate | python3 -m json.tool
 ```
 
 ## Notes
