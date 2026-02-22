@@ -1,0 +1,16 @@
+.env
+.git
+.gitignore
+.claude
+.specify
+specs
+tests
+venv
+data
+__pycache__
+*.pyc
+*.md
+!requirements.txt
+Dockerfile
+docker-compose.yml
+.dockerignore
