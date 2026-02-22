@@ -3,3 +3,4 @@ requests
 Pillow
 anthropic
 python-dotenv
+flask

@@ -162,3 +162,212 @@ def load_cookie_data(path: str) -> dict | None:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Metrics storage (003 - marketing automation)
+# ---------------------------------------------------------------------------
+
+def append_metrics(metric_dict: dict) -> None:
+    """Append a performance metric entry to data/metrics/YYYY-MM.jsonl."""
+    metrics_dir = get_data_dir() / "metrics"
+    os.makedirs(metrics_dir, exist_ok=True)
+
+    collected_at = datetime.fromisoformat(metric_dict["collected_at"])
+    month_prefix = collected_at.strftime("%Y-%m")
+    filepath = metrics_dir / f"{month_prefix}.jsonl"
+
+    with open(filepath, "a", encoding="utf-8") as f:
+        f.write(json.dumps(metric_dict, ensure_ascii=False) + "\n")
+
+
+def load_metrics(year_month: str | None = None) -> list[dict]:
+    """Load performance metrics from data/metrics/.
+
+    Args:
+        year_month: Optional filter like '2026-02'. If None, loads current month.
+
+    Returns:
+        List of metric dictionaries.
+    """
+    metrics_dir = get_data_dir() / "metrics"
+    if not metrics_dir.exists():
+        return []
+
+    if year_month is None:
+        year_month = datetime.now().strftime("%Y-%m")
+
+    filepath = metrics_dir / f"{year_month}.jsonl"
+    if not filepath.exists():
+        return []
+
+    metrics = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                metrics.append(json.loads(line))
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# Competitor storage (003 - marketing automation)
+# ---------------------------------------------------------------------------
+
+def save_competitors(competitors: list[dict]) -> None:
+    """Save competitor account list to data/competitors.json."""
+    filepath = get_data_dir() / "competitors.json"
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(competitors, f, ensure_ascii=False, indent=2)
+
+
+def load_competitors() -> list[dict]:
+    """Load competitor account list from data/competitors.json."""
+    filepath = get_data_dir() / "competitors.json"
+    if not filepath.exists():
+        return []
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def append_competitor_posts(posts: list[dict]) -> None:
+    """Append scraped competitor posts to data/competitors/YYYY-MM.jsonl."""
+    if not posts:
+        return
+
+    competitors_dir = get_data_dir() / "competitors"
+    os.makedirs(competitors_dir, exist_ok=True)
+
+    month_prefix = datetime.now().strftime("%Y-%m")
+    filepath = competitors_dir / f"{month_prefix}.jsonl"
+
+    with open(filepath, "a", encoding="utf-8") as f:
+        for post in posts:
+            f.write(json.dumps(post, ensure_ascii=False) + "\n")
+
+
+def load_competitor_posts(year_month: str | None = None) -> list[dict]:
+    """Load competitor posts from data/competitors/YYYY-MM.jsonl."""
+    competitors_dir = get_data_dir() / "competitors"
+    if not competitors_dir.exists():
+        return []
+
+    if year_month is None:
+        year_month = datetime.now().strftime("%Y-%m")
+
+    filepath = competitors_dir / f"{year_month}.jsonl"
+    if not filepath.exists():
+        return []
+
+    posts = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                posts.append(json.loads(line))
+    return posts
+
+
+# ---------------------------------------------------------------------------
+# Report storage (003 - marketing automation)
+# ---------------------------------------------------------------------------
+
+def save_report(report_dict: dict, year_week: str | None = None) -> str:
+    """Save a benchmark or weekly report to data/reports/YYYY-WW.json.
+
+    Args:
+        report_dict: Report data dictionary.
+        year_week: Optional key like '2026-08'. If None, uses current week.
+
+    Returns:
+        The file path of the saved report.
+    """
+    reports_dir = get_data_dir() / "reports"
+    os.makedirs(reports_dir, exist_ok=True)
+
+    if year_week is None:
+        now = datetime.now()
+        year_week = f"{now.year}-{now.isocalendar()[1]:02d}"
+
+    filepath = reports_dir / f"{year_week}.json"
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(report_dict, f, ensure_ascii=False, indent=2)
+
+    return str(filepath)
+
+
+def load_report(year_week: str) -> dict | None:
+    """Load a report from data/reports/YYYY-WW.json."""
+    filepath = get_data_dir() / "reports" / f"{year_week}.json"
+    if not filepath.exists():
+        return None
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Expert content storage (003 - marketing automation)
+# ---------------------------------------------------------------------------
+
+def append_expert_content(content_dict: dict) -> None:
+    """Append expert content entry to data/expert_content/YYYY-MM.jsonl."""
+    expert_dir = get_data_dir() / "expert_content"
+    os.makedirs(expert_dir, exist_ok=True)
+
+    month_prefix = datetime.now().strftime("%Y-%m")
+    filepath = expert_dir / f"{month_prefix}.jsonl"
+
+    with open(filepath, "a", encoding="utf-8") as f:
+        f.write(json.dumps(content_dict, ensure_ascii=False) + "\n")
+
+
+def load_expert_content(year_month: str | None = None) -> list[dict]:
+    """Load expert content from data/expert_content/YYYY-MM.jsonl."""
+    expert_dir = get_data_dir() / "expert_content"
+    if not expert_dir.exists():
+        return []
+
+    if year_month is None:
+        year_month = datetime.now().strftime("%Y-%m")
+
+    filepath = expert_dir / f"{year_month}.jsonl"
+    if not filepath.exists():
+        return []
+
+    entries = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+    return entries
+
+
+def list_recent_posts(limit: int = 20) -> list[dict]:
+    """Load the most recent posts from data/posts/, sorted by creation date.
+
+    Args:
+        limit: Maximum number of posts to return.
+
+    Returns:
+        List of post dicts, most recent first.
+    """
+    posts_dir = get_data_dir() / "posts"
+    if not posts_dir.exists():
+        return []
+
+    post_files = sorted(posts_dir.glob("*.json"), reverse=True)
+    posts = []
+    for fp in post_files[:limit]:
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                posts.append(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return posts
