@@ -1,0 +1,15 @@
+# 쓰려면 한 번만: pip install pre-commit && pre-commit install
+# (pre-commit install은 .git/hooks/pre-commit을 바꿔요. 전역 템플릿 훅을 쓰고 있다면 먼저 확인하세요)
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+      - id: detect-private-key

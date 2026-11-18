@@ -1,0 +1,25 @@
+# 의존성 업데이트 알림. 주 1회, 작은 업데이트는 PR 하나로 묶어요.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      docker-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # 언어 런타임 버전(예: python 3.9)은 손으로 정해요. 패치만 받아요.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
